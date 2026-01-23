@@ -102,7 +102,6 @@ Process ingested data using modern stream/batch processing frameworks
 - Structured Streaming for near real-time
 - Rich SQL API
 - Strong aggregation capabilities
-- Excellent for your use cases (sales aggregations)
 
 **Example Code (Scala):**
 ```scala
@@ -184,7 +183,7 @@ object FlinkSalesPipeline {
 **Best for:** Lightweight stream processing, tight Kafka integration
 
 **Features:**
-- Library (not framework) - runs in your app
+- Library (not framework)
 - Exactly-once semantics
 - Local state stores
 - Simple deployment
@@ -217,8 +216,8 @@ object KafkaStreamsPipeline {
 ```
 
 ### Recommended Choice
-**Apache Spark with Scala** for your use case because:
-- Your pipelines are aggregation-heavy (perfect for Spark SQL)
+**Apache Spark with Scala**:
+- Pipelines are aggregation-heavy (perfect for Spark SQL)
 - Simpler operational model than Flink
 - Better for batch and micro-batch than Kafka Streams
 - Rich ecosystem and tooling
@@ -284,7 +283,7 @@ trait LineageTracker {
   ): Unit
 }
 
-// Implement custom hooks in your Spark jobs
+// Implement custom hooks in Spark jobs
 class SparkLineageTracker extends LineageTracker {
   def trackTransformation(...) = {
     // POST to lineage service
