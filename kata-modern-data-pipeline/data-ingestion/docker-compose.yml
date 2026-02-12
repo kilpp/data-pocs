@@ -1,0 +1,106 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:15
+    container_name: sales-postgres
+    environment:
+      POSTGRES_DB: sales
+      POSTGRES_USER: sales_user
+      POSTGRES_PASSWORD: sales_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_data:/var/lib/postgresql/data
+
+  zookeeper:
+    image: docker.io/confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "2181:2181"
+
+  kafka:
+    image: docker.io/confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+
+  kafka-connect:
+    image: docker.io/confluentinc/cp-kafka-connect:7.5.0
+    container_name: kafka-connect
+    depends_on:
+      - kafka
+      - postgres
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: "sales-connect"
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    command:
+      - bash
+      - -c
+      - |
+        confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:10.7.4
+        /etc/confluent/docker/run
+
+  connector-init:
+    image: docker.io/curlimages/curl:8.5.0
+    container_name: connector-init
+    depends_on:
+      - kafka-connect
+    restart: "no"
+    command:
+      - sh
+      - -c
+      - |
+        echo "Waiting for Kafka Connect..."
+        until curl -s http://kafka-connect:8083/connectors; do
+          sleep 5
+        done
+        echo "Kafka Connect is ready. Registering connector..."
+        curl -X POST http://kafka-connect:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "postgres-sales-source",
+            "config": {
+              "connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
+              "connection.url": "jdbc:postgresql://postgres:5432/sales",
+              "connection.user": "sales_user",
+              "connection.password": "sales_pass",
+              "table.whitelist": "sales_transactions",
+              "mode": "timestamp+incrementing",
+              "timestamp.column.name": "created_at",
+              "incrementing.column.name": "id",
+              "topic.prefix": "sales-",
+              "poll.interval.ms": "5000",
+              "tasks.max": "1",
+              "numeric.mapping": "best_fit"
+            }
+          }'
+        echo ""
+        echo "Connector registered."
+
+volumes:
+  postgres_data:
