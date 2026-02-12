@@ -30,7 +30,7 @@ object SalesDataGenerator {
     val user = sys.env.getOrElse("DB_USER", "sales_user")
     val password = sys.env.getOrElse("DB_PASSWORD", "sales_pass")
     val intervalMs = sys.env.getOrElse("INTERVAL_MS", "1000").toLong
-    val batchSize = sys.env.getOrElse("BATCH_SIZE", "5").toInt
+    val batchSize = sys.env.getOrElse("BATCH_SIZE", "50").toInt
 
     println(s"Connecting to $url ...")
     val conn = DriverManager.getConnection(url, user, password)
