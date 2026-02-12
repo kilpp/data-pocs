@@ -1,0 +1,14 @@
+*vscode
+*metals
+*scala-build
+*project
+*target
+*.log
+*.class
+*.jar
+*.war
+*.ear
+*.iml
+*.idea
+*.sbt
+*.lock
