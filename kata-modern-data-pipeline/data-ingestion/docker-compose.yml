@@ -63,23 +63,33 @@ services:
       - -c
       - |
         confluent-hub install --no-prompt confluentinc/kafka-connect-jdbc:10.7.4
+        confluent-hub install --no-prompt jcustenborder/kafka-connect-spooldir:2.0.65
+        mkdir -p /data/spool/input /data/spool/finished /data/spool/error
         /etc/confluent/docker/run
+    volumes:
+      - ./spool:/data/spool
 
   connector-init:
-    image: docker.io/curlimages/curl:8.5.0
+    image: docker.io/confluentinc/cp-kafka-connect:7.5.0
     container_name: connector-init
     depends_on:
       - kafka-connect
     restart: "no"
+    volumes:
+      - ./spool:/data/spool
     command:
-      - sh
+      - bash
       - -c
       - |
+        echo "Creating spool directories..."
+        mkdir -p /data/spool/input /data/spool/finished /data/spool/error
+        echo "salesman_id,salesman_name,city,amount,email,created_at" > /data/spool/input/seed.csv
+        echo "SM-SEED-001,Seed Record,New York,100.00,seed@example.com,2026-01-01T00:00:00Z" >> /data/spool/input/seed.csv
         echo "Waiting for Kafka Connect..."
         until curl -s http://kafka-connect:8083/connectors; do
           sleep 5
         done
-        echo "Kafka Connect is ready. Registering connector..."
+        echo "Kafka Connect is ready. Registering JDBC connector..."
         curl -X POST http://kafka-connect:8083/connectors \
           -H "Content-Type: application/json" \
           -d '{
@@ -100,7 +110,26 @@ services:
             }
           }'
         echo ""
-        echo "Connector registered."
+        echo "JDBC connector registered."
+        echo "Registering SpoolDir connector..."
+        curl -X POST http://kafka-connect:8083/connectors \
+          -H "Content-Type: application/json" \
+          -d '{
+            "name": "csv-sales-source",
+            "config": {
+              "connector.class": "com.github.jcustenborder.kafka.connect.spooldir.SpoolDirCsvSourceConnector",
+              "input.path": "/data/spool/input",
+              "finished.path": "/data/spool/finished",
+              "error.path": "/data/spool/error",
+              "input.file.pattern": ".*\\.csv$",
+              "topic": "sales-csv",
+              "csv.first.row.as.header": "true",
+              "schema.generation.enabled": "true",
+              "tasks.max": "1"
+            }
+          }'
+        echo ""
+        echo "SpoolDir connector registered. Done."
 
 volumes:
   postgres_data:
