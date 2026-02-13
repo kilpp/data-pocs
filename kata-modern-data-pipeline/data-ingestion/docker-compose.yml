@@ -31,10 +31,12 @@ services:
     environment:
       KAFKA_BROKER_ID: 1
       KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ZOOKEEPER_CONNECTION_TIMEOUT_MS: 60000
       KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
       KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
       KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    restart: unless-stopped
 
   kafka-connect:
     image: docker.io/confluentinc/cp-kafka-connect:7.5.0
@@ -58,6 +60,8 @@ services:
       CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
       CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
       CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+    restart: unless-stopped
+    user: "0:0"
     command:
       - bash
       - -c
@@ -77,6 +81,7 @@ services:
     restart: "no"
     volumes:
       - ./spool:/data/spool
+      - ./connectors:/data/connectors
     command:
       - bash
       - -c
@@ -84,52 +89,35 @@ services:
         echo "Creating spool directories..."
         mkdir -p /data/spool/input /data/spool/finished /data/spool/error
         echo "Waiting for Kafka Connect..."
-        until curl -s http://kafka-connect:8083/connectors; do
+        until curl -s http://kafka-connect:8083/connectors > /dev/null 2>&1; do
           sleep 5
         done
-        echo "Kafka Connect is ready. Registering JDBC connector..."
-        curl -X POST http://kafka-connect:8083/connectors \
+        echo "Kafka Connect is ready."
+        echo "Registering JDBC connector..."
+        curl -s -X POST http://kafka-connect:8083/connectors \
           -H "Content-Type: application/json" \
-          -d '{
-            "name": "postgres-sales-source",
-            "config": {
-              "connector.class": "io.confluent.connect.jdbc.JdbcSourceConnector",
-              "connection.url": "jdbc:postgresql://postgres:5432/sales",
-              "connection.user": "sales_user",
-              "connection.password": "sales_pass",
-              "table.whitelist": "sales_transactions",
-              "mode": "timestamp+incrementing",
-              "timestamp.column.name": "created_at",
-              "incrementing.column.name": "id",
-              "topic.prefix": "sales-",
-              "poll.interval.ms": "5000",
-              "tasks.max": "1",
-              "numeric.mapping": "best_fit"
-            }
-          }'
+          -d @/data/connectors/jdbc-source.json
         echo ""
-        echo "JDBC connector registered."
         echo "Registering SpoolDir connector..."
-        curl -X POST http://kafka-connect:8083/connectors \
+        curl -s -X POST http://kafka-connect:8083/connectors \
           -H "Content-Type: application/json" \
-          -d '{
-            "name": "csv-sales-source",
-            "config": {
-              "connector.class": "com.github.jcustenborder.kafka.connect.spooldir.SpoolDirCsvSourceConnector",
-              "input.path": "/data/spool/input",
-              "finished.path": "/data/spool/finished",
-              "error.path": "/data/spool/error",
-              "input.file.pattern": ".*\\.csv$",
-              "topic": "sales-csv",
-              "csv.first.row.as.header": "true",
-              "schema.generation.enabled": "false",
-              "value.schema": "{\"name\":\"sales_csv\",\"type\":\"STRUCT\",\"fields\":[{\"name\":\"salesman_id\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"salesman_name\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"city\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"amount\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"email\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"created_at\",\"type\":\"STRING\",\"isOptional\":false}]}",
-              "key.schema": "{\"name\":\"sales_csv_key\",\"type\":\"STRUCT\",\"fields\":[{\"name\":\"salesman_id\",\"type\":\"STRING\",\"isOptional\":false}]}",
-              "tasks.max": "1"
-            }
-          }'
+          -d @/data/connectors/csv-source.json
         echo ""
-        echo "SpoolDir connector registered. Done."
+        echo "All connectors registered. Done."
+
+  kafka-ui:
+    image: docker.io/provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    depends_on:
+      - kafka
+      - kafka-connect
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
 
 volumes:
   postgres_data:

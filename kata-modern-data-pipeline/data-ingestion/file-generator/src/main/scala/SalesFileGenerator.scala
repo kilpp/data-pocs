@@ -26,7 +26,7 @@ object SalesFileGenerator {
   val rand = new Random()
 
   def main(args: Array[String]): Unit = {
-    val outputDir = sys.env.getOrElse("OUTPUT_DIR", "./spool/input")
+    val outputDir = sys.env.getOrElse("OUTPUT_DIR", "../spool/input")
     val intervalMs = sys.env.getOrElse("INTERVAL_MS", "5000").toLong
     val rowsPerFile = sys.env.getOrElse("ROWS_PER_FILE", "50").toInt
 

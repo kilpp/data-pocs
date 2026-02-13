@@ -1,0 +1,16 @@
+{
+  "name": "csv-sales-source",
+  "config": {
+    "connector.class": "com.github.jcustenborder.kafka.connect.spooldir.SpoolDirCsvSourceConnector",
+    "input.path": "/data/spool/input",
+    "finished.path": "/data/spool/finished",
+    "error.path": "/data/spool/error",
+    "input.file.pattern": ".*\\.csv$",
+    "topic": "sales-sales_transactions",
+    "csv.first.row.as.header": "true",
+    "schema.generation.enabled": "false",
+    "key.schema": "{\"name\":\"sales_csv_key\",\"type\":\"STRUCT\",\"isOptional\":false,\"fieldSchemas\":{\"salesman_id\":{\"type\":\"STRING\",\"isOptional\":false}}}",
+    "value.schema": "{\"name\":\"sales_csv\",\"type\":\"STRUCT\",\"isOptional\":false,\"fieldSchemas\":{\"salesman_id\":{\"type\":\"STRING\",\"isOptional\":false},\"salesman_name\":{\"type\":\"STRING\",\"isOptional\":false},\"city\":{\"type\":\"STRING\",\"isOptional\":false},\"amount\":{\"type\":\"STRING\",\"isOptional\":false},\"email\":{\"type\":\"STRING\",\"isOptional\":false},\"created_at\":{\"type\":\"STRING\",\"isOptional\":false}}}",
+    "tasks.max": "1"
+  }
+}
