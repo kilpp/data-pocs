@@ -12,3 +12,4 @@
 *.idea
 *.sbt
 *.lock
+*spool

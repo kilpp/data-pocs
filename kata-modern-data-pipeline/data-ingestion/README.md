@@ -1,25 +1,28 @@
 # Data Ingestion Layer
 
-This is the first layer of the modern data pipeline. It generates sales transaction data, stores it in PostgreSQL, and streams it into Apache Kafka using Kafka Connect.
+This is the first layer of the modern data pipeline. It ingests sales transaction data from two sources into Apache Kafka using Kafka Connect.
 
 ## How It Works
 
 ```
-[Scala Data Generator] --> [PostgreSQL] --> [Kafka Connect JDBC] --> [Kafka Topic]
+[Data Generator]  --> [PostgreSQL] --> [Kafka Connect JDBC]     --> [sales-sales_transactions]
+[File Generator]  --> [CSV Files]  --> [Kafka Connect SpoolDir] --> [sales-csv]
 ```
 
-1. **Data Generator** (`data-generator/`): A Scala application that continuously inserts randomized sales transactions into PostgreSQL. Each record contains a salesman ID, name, city, sale amount, email, and timestamp.
+### Source 1: PostgreSQL (JDBC Connector)
 
-2. **PostgreSQL**: Stores the `sales_transactions` table. Initialized automatically via `init.sql` when the container starts.
+1. **Data Generator** (`data-generator/`): Scala app that continuously inserts randomized sales transactions into PostgreSQL.
+2. **Kafka Connect JDBC Source**: Polls PostgreSQL every 5s for new rows (using `timestamp+incrementing` mode) and publishes them to the `sales-sales_transactions` topic.
 
-3. **Kafka Connect**: Runs the Confluent JDBC Source Connector, which polls PostgreSQL every 5 seconds for new rows (using `timestamp+incrementing` mode on the `id` and `created_at` columns) and publishes them to the Kafka topic `sales-sales_transactions`.
+### Source 2: CSV Files (SpoolDir Connector)
 
-4. **Kafka**: Receives the streamed records, making them available for downstream processing (Spark, Flink, etc.).
+1. **File Generator** (`file-generator/`): Scala app that writes CSV files with sales data into the `spool/input/` directory.
+2. **Kafka Connect SpoolDir**: Watches `spool/input/` for new `.csv` files, reads them, publishes each row to the `sales-csv` topic, then moves the file to `spool/finished/`.
 
 ## Prerequisites
 
 - Podman (or Docker) with Compose
-- JDK 11+ and sbt (for the data generator)
+- JDK 11+ and sbt
 
 ## Step by Step
 
@@ -30,71 +33,82 @@ cd data-ingestion
 podman-compose up -d
 ```
 
-This starts four containers:
+This starts four containers + an init container that auto-registers both connectors:
+
 | Container | Port | Purpose |
 |---|---|---|
 | sales-postgres | 5432 | PostgreSQL database |
 | zookeeper | 2181 | Kafka coordination |
 | kafka | 9092 | Message broker |
-| kafka-connect | 8083 | JDBC Source Connector |
+| kafka-connect | 8083 | JDBC + SpoolDir connectors |
+| connector-init | - | Registers connectors on startup, then exits |
 
-Wait ~30 seconds for Kafka Connect to fully start (it installs the JDBC connector plugin on first boot).
+Wait ~60 seconds for Kafka Connect to install plugins and start. The `connector-init` service will automatically register both connectors.
 
-### 2. Register the Kafka Connect connector
+### 2. Verify connectors are running
 
 ```bash
-curl -X POST http://localhost:8083/connectors \
-  -H "Content-Type: application/json" \
-  -d @connector-config.json
+curl http://localhost:8083/connectors | jq
 ```
 
-Verify it's running:
+Should return `["postgres-sales-source","csv-sales-source"]`. Check individual status:
 
 ```bash
 curl http://localhost:8083/connectors/postgres-sales-source/status | jq
+curl http://localhost:8083/connectors/csv-sales-source/status | jq
 ```
 
-Both `connector.state` and `tasks[0].state` should be `RUNNING`.
+### 3. Start the data generators
 
-### 3. Start the data generator
+**PostgreSQL source** (in one terminal):
 
 ```bash
-cd data-generator
+cd data-ingestion/data-generator
 sbt run
 ```
 
-You should see output like:
+**CSV file source** (in another terminal):
 
-```
-Connecting to jdbc:postgresql://localhost:5432/sales ...
-Connected. Generating sales data...
-Inserted batch of 5 records (total: 5)
-Inserted batch of 5 records (total: 10)
-...
+```bash
+cd data-ingestion/file-generator
+sbt run
 ```
 
 ### 4. Verify the data flow
 
-**Check PostgreSQL:**
+**Check PostgreSQL records:**
 
 ```bash
 podman exec sales-postgres psql -U sales_user -d sales \
   -c "SELECT * FROM sales_transactions ORDER BY id DESC LIMIT 5;"
 ```
 
-**Check Kafka topic:**
+**Check CSV files being processed:**
+
+```bash
+ls spool/input/      # pending files
+ls spool/finished/   # processed files
+```
+
+**Read from JDBC topic:**
 
 ```bash
 podman exec kafka kafka-console-consumer \
   --bootstrap-server localhost:9092 \
   --topic sales-sales_transactions \
-  --from-beginning \
-  --max-messages 3
+  --from-beginning --max-messages 3
 ```
 
-You should see JSON messages with schema and payload for each sales transaction.
+**Read from CSV topic:**
 
-**List all Kafka topics:**
+```bash
+podman exec kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic sales-csv \
+  --from-beginning --max-messages 3
+```
+
+**List all topics:**
 
 ```bash
 podman exec kafka kafka-topics --bootstrap-server localhost:9092 --list
@@ -110,22 +124,42 @@ podman exec kafka kafka-topics --bootstrap-server localhost:9092 --list
 | `DB_USER` | `sales_user` | Database user |
 | `DB_PASSWORD` | `sales_pass` | Database password |
 | `INTERVAL_MS` | `1000` | Milliseconds between batches |
-| `BATCH_SIZE` | `5` | Records per batch |
+| `BATCH_SIZE` | `50` | Records per batch |
 
-### Kafka Connect Connector (`connector-config.json`)
+### File Generator (environment variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `OUTPUT_DIR` | `./spool/input` | Directory to write CSV files |
+| `INTERVAL_MS` | `5000` | Milliseconds between files |
+| `ROWS_PER_FILE` | `10` | Rows per CSV file |
+
+### Kafka Connect Connectors
+
+**JDBC Source** (`postgres-sales-source`):
 
 | Setting | Value | Description |
 |---|---|---|
 | `mode` | `timestamp+incrementing` | Detects new rows by ID + timestamp |
 | `poll.interval.ms` | `5000` | How often to poll PostgreSQL |
-| `topic.prefix` | `sales-` | Kafka topic = prefix + table name |
-| `numeric.mapping` | `best_fit` | Decimals as numbers, not base64 bytes |
+| `topic.prefix` | `sales-` | Topic = prefix + table name |
+| `numeric.mapping` | `best_fit` | Decimals as numbers, not base64 |
+
+**SpoolDir Source** (`csv-sales-source`):
+
+| Setting | Value | Description |
+|---|---|---|
+| `input.path` | `/data/spool/input` | Directory to watch for CSV files |
+| `finished.path` | `/data/spool/finished` | Where processed files go |
+| `topic` | `sales-csv` | Target Kafka topic |
+| `csv.first.row.as.header` | `true` | First row is column names |
 
 ## Teardown
 
 ```bash
 podman-compose down        # stop containers, keep data
 podman-compose down -v     # stop containers and delete volumes
+rm -rf spool/              # clean up CSV spool directory
 ```
 
 ## Project Structure
@@ -134,12 +168,20 @@ podman-compose down -v     # stop containers and delete volumes
 data-ingestion/
 ├── docker-compose.yml          # Infrastructure (PostgreSQL, Kafka, Zookeeper, Kafka Connect)
 ├── init.sql                    # PostgreSQL schema
-├── connector-config.json       # JDBC Source Connector configuration
+├── connector-config.json       # JDBC Source Connector config (standalone reference)
+├── spool/                      # Shared directory between file-generator and Kafka Connect
+│   ├── input/                  # New CSV files land here
+│   ├── finished/               # Processed files moved here
+│   └── error/                  # Failed files moved here
 ├── README.md
-└── data-generator/
-    ├── build.sbt               # Scala project definition
-    ├── project/
-    │   └── build.properties    # sbt version
+├── data-generator/             # PostgreSQL data generator
+│   ├── build.sbt
+│   ├── project/build.properties
+│   └── src/main/scala/
+│       └── SalesDataGenerator.scala
+└── file-generator/             # CSV file generator
+    ├── build.sbt
+    ├── project/build.properties
     └── src/main/scala/
-        └── SalesDataGenerator.scala
+        └── SalesFileGenerator.scala
 ```
