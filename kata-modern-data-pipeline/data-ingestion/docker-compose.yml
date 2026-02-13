@@ -83,8 +83,6 @@ services:
       - |
         echo "Creating spool directories..."
         mkdir -p /data/spool/input /data/spool/finished /data/spool/error
-        echo "salesman_id,salesman_name,city,amount,email,created_at" > /data/spool/input/seed.csv
-        echo "SM-SEED-001,Seed Record,New York,100.00,seed@example.com,2026-01-01T00:00:00Z" >> /data/spool/input/seed.csv
         echo "Waiting for Kafka Connect..."
         until curl -s http://kafka-connect:8083/connectors; do
           sleep 5
@@ -124,7 +122,9 @@ services:
               "input.file.pattern": ".*\\.csv$",
               "topic": "sales-csv",
               "csv.first.row.as.header": "true",
-              "schema.generation.enabled": "true",
+              "schema.generation.enabled": "false",
+              "value.schema": "{\"name\":\"sales_csv\",\"type\":\"STRUCT\",\"fields\":[{\"name\":\"salesman_id\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"salesman_name\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"city\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"amount\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"email\",\"type\":\"STRING\",\"isOptional\":false},{\"name\":\"created_at\",\"type\":\"STRING\",\"isOptional\":false}]}",
+              "key.schema": "{\"name\":\"sales_csv_key\",\"type\":\"STRUCT\",\"fields\":[{\"name\":\"salesman_id\",\"type\":\"STRING\",\"isOptional\":false}]}",
               "tasks.max": "1"
             }
           }'
