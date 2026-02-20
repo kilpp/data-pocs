@@ -1,12 +1,13 @@
 # Data Ingestion Layer
 
-This is the first layer of the modern data pipeline. It ingests sales transaction data from two sources into Apache Kafka using Kafka Connect.
+This is the first layer of the modern data pipeline. It ingests sales transaction data from three sources into Apache Kafka.
 
 ## How It Works
 
 ```
 [Data Generator]  --> [PostgreSQL] --> [Kafka Connect JDBC]     --> [sales-sales_transactions]
 [File Generator]  --> [CSV Files]  --> [Kafka Connect SpoolDir] --> [sales-csv]
+[SOAP Server]     --> [SOAP/XML]   --> [SOAP Connector]         --> [sales-sales_transactions]
 ```
 
 ### Source 1: PostgreSQL (JDBC Connector)
@@ -18,6 +19,11 @@ This is the first layer of the modern data pipeline. It ingests sales transactio
 
 1. **File Generator** (`file-generator/`): Scala app that writes CSV files with sales data into the `spool/input/` directory.
 2. **Kafka Connect SpoolDir**: Watches `spool/input/` for new `.csv` files, reads them, publishes each row to the `sales-csv` topic, then moves the file to `spool/finished/`.
+
+### Source 3: SOAP Web Service (Standalone Connector)
+
+1. **SOAP Server** (`soap-server/`): Scala app that exposes a mock SOAP web service on port 8089. It serves a `GetSalesTransactions` operation that returns randomized sales data as SOAP/XML, including a WSDL at `?wsdl`.
+2. **SOAP Connector** (`soap-connector/`): Scala app that polls the SOAP endpoint every 5s, parses the XML response, converts each transaction to JSON, and produces it to the `sales-sales_transactions` Kafka topic. Since there is no standard Kafka Connect SOAP plugin, this runs as a standalone Kafka producer.
 
 ## Prerequisites
 
@@ -74,6 +80,20 @@ cd data-ingestion/file-generator
 sbt run
 ```
 
+**SOAP source** (requires two terminals):
+
+```bash
+# Terminal 1: start the mock SOAP server
+cd data-ingestion/soap-server
+sbt run
+```
+
+```bash
+# Terminal 2: start the SOAP-to-Kafka connector
+cd data-ingestion/soap-connector
+sbt run
+```
+
 ### 4. Verify the data flow
 
 **Check PostgreSQL records:**
@@ -108,6 +128,12 @@ podman exec kafka kafka-console-consumer \
   --from-beginning --max-messages 3
 ```
 
+**Check SOAP server (WSDL):**
+
+```bash
+curl http://localhost:8089/ws/sales?wsdl
+```
+
 **List all topics:**
 
 ```bash
@@ -133,6 +159,22 @@ podman exec kafka kafka-topics --bootstrap-server localhost:9092 --list
 | `OUTPUT_DIR` | `./spool/input` | Directory to write CSV files |
 | `INTERVAL_MS` | `5000` | Milliseconds between files |
 | `ROWS_PER_FILE` | `10` | Rows per CSV file |
+
+### SOAP Server (environment variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `8089` | HTTP port for the SOAP service |
+| `BATCH_SIZE` | `50` | Transactions per SOAP response |
+
+### SOAP Connector (environment variables)
+
+| Variable | Default | Description |
+|---|---|---|
+| `SOAP_URL` | `http://localhost:8089/ws/sales` | SOAP endpoint URL |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka broker address |
+| `TOPIC` | `sales-sales_transactions` | Target Kafka topic |
+| `POLL_INTERVAL_MS` | `5000` | Milliseconds between SOAP polls |
 
 ### Kafka Connect Connectors
 
@@ -179,9 +221,19 @@ data-ingestion/
 │   ├── project/build.properties
 │   └── src/main/scala/
 │       └── SalesDataGenerator.scala
-└── file-generator/             # CSV file generator
+├── file-generator/             # CSV file generator
+│   ├── build.sbt
+│   ├── project/build.properties
+│   └── src/main/scala/
+│       └── SalesFileGenerator.scala
+├── soap-server/                # Mock SOAP web service
+│   ├── build.sbt
+│   ├── project/build.properties
+│   └── src/main/scala/
+│       └── SoapSalesServer.scala
+└── soap-connector/             # SOAP-to-Kafka standalone connector
     ├── build.sbt
     ├── project/build.properties
     └── src/main/scala/
-        └── SalesFileGenerator.scala
+        └── SoapSalesConnector.scala
 ```

@@ -105,6 +105,76 @@ services:
         echo ""
         echo "All connectors registered. Done."
 
+  data-generator:
+    image: docker.io/sbtscala/scala-sbt:amazoncorretto-al2023-17.0.16_1.12.3_2.13.18
+    container_name: data-generator
+    depends_on:
+      - postgres
+    working_dir: /app
+    volumes:
+      - ./data-generator:/app
+      - sbt_cache_data_gen:/root/.sbt
+      - ivy_cache_data_gen:/root/.cache
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/sales
+      DB_USER: sales_user
+      DB_PASSWORD: sales_pass
+      INTERVAL_MS: "1000"
+      BATCH_SIZE: "50"
+    command: sbt run
+    restart: unless-stopped
+
+  file-generator:
+    image: docker.io/sbtscala/scala-sbt:amazoncorretto-al2023-17.0.16_1.12.3_2.13.18
+    container_name: file-generator
+    working_dir: /app
+    volumes:
+      - ./file-generator:/app
+      - ./spool:/data/spool
+      - sbt_cache_file_gen:/root/.sbt
+      - ivy_cache_file_gen:/root/.cache
+    environment:
+      OUTPUT_DIR: /data/spool/input
+      INTERVAL_MS: "5000"
+      ROWS_PER_FILE: "50"
+    command: sbt run
+    restart: unless-stopped
+
+  soap-server:
+    image: docker.io/sbtscala/scala-sbt:amazoncorretto-al2023-17.0.16_1.12.3_2.13.18
+    container_name: soap-server
+    working_dir: /app
+    volumes:
+      - ./soap-server:/app
+      - sbt_cache_server:/root/.sbt
+      - ivy_cache_server:/root/.cache
+    ports:
+      - "8089:8089"
+    environment:
+      PORT: "8089"
+      BATCH_SIZE: "50"
+    command: sbt run
+    restart: unless-stopped
+
+  soap-connector:
+    image: docker.io/sbtscala/scala-sbt:amazoncorretto-al2023-17.0.16_1.12.3_2.13.18
+    container_name: soap-connector
+    depends_on:
+      - kafka
+      - soap-server
+    working_dir: /app
+    volumes:
+      - ./soap-connector:/app
+      - sbt_cache_connector:/root/.sbt
+      - ivy_cache_connector:/root/.cache
+    environment:
+      SOAP_URL: http://soap-server:8089/ws/sales
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      TOPIC: sales-sales_transactions
+      POLL_INTERVAL_MS: "5000"
+    command: sbt run
+    restart: unless-stopped
+
   kafka-ui:
     image: docker.io/provectuslabs/kafka-ui:latest
     container_name: kafka-ui
@@ -121,3 +191,11 @@ services:
 
 volumes:
   postgres_data:
+  sbt_cache_data_gen:
+  ivy_cache_data_gen:
+  sbt_cache_file_gen:
+  ivy_cache_file_gen:
+  sbt_cache_server:
+  ivy_cache_server:
+  sbt_cache_connector:
+  ivy_cache_connector:
